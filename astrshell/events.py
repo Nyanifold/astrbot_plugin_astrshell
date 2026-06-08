@@ -1,9 +1,7 @@
-import datetime
-import os
-import sys
 import time
 import uuid
 
+from astrbot.api import logger
 from astrbot.core.message.components import Plain
 from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.astr_message_event import AstrMessageEvent
@@ -50,41 +48,26 @@ class ShellMessageEvent(AstrMessageEvent):
         self._sent_once = False
 
     async def send(self, message: MessageChain) -> None:
-        _debug = os.environ.get("ASTRSHELL_DEBUG")
         req_id = self.get_extra("req_id", "")
         async_mode = self.get_extra("async_mode", False)
-        if _debug:
-            ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            print(f"[{ts}] [astrshell:events] ShellMessageEvent.send called: req_id={req_id}, async={async_mode}, writer={self._writer is not None}", file=sys.stderr, flush=True)
+        logger.debug(f"ShellMessageEvent.send called: req_id={req_id}, async={async_mode}, writer={self._writer is not None}")
         if message is None:
-            if _debug:
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[{ts}] [astrshell:events] message is None, returning", file=sys.stderr, flush=True)
+            logger.debug("ShellMessageEvent.send: message is None, returning")
             return
         if self._writer is not None:
             formatted = list(format_reply(message, req_id=req_id,
                                     render_markdown=self._render_markdown,
                                     show_header=async_mode or not self._sent_once,
                                     async_mode=async_mode))
-            if _debug:
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[{ts}] [astrshell:events] formatted {len(formatted)} messages", file=sys.stderr, flush=True)
+            logger.debug(f"ShellMessageEvent.send: formatted {len(formatted)} messages")
             for msg in formatted:
-                if _debug:
-                    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                    print(f"[{ts}] [astrshell:events] writing msg: type={msg.get('type')}, id={msg.get('id')}, len={len(encode_msg(msg))}", file=sys.stderr, flush=True)
+                logger.debug(f"ShellMessageEvent.send: writing msg type={msg.get('type')} id={msg.get('id')} len={len(encode_msg(msg))}")
                 self._writer.write(encode_msg(msg))
-            if _debug:
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[{ts}] [astrshell:events] calling writer.drain()", file=sys.stderr, flush=True)
+            logger.debug("ShellMessageEvent.send: calling writer.drain()")
             await self._writer.drain()
-            if _debug:
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[{ts}] [astrshell:events] writer.drain() done", file=sys.stderr, flush=True)
+            logger.debug("ShellMessageEvent.send: writer.drain() done")
         else:
-            if _debug:
-                ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                print(f"[{ts}] [astrshell:events] NO WRITER!", file=sys.stderr, flush=True)
+            logger.debug("ShellMessageEvent.send: NO WRITER!")
         self._sent_once = True
         await super().send(message)
 

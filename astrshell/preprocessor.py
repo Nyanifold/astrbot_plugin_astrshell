@@ -127,59 +127,53 @@ def parse_input(msg: dict[str, Any]) -> dict[str, Any]:
 
     FROM: astrshell/parser.py parse_input() — moved verbatim.
     """
-    t = msg.get("type")
-
-    if t == "record_cmd":
-        return {"kind": "record_cmd", "cmd": msg["cmd"], "exit_code": msg.get("exit_code", 0)}
-
-    if t == "stop":
-        return {"kind": "stop"}
-
-    if t != "input":
-        return {"kind": "unknown", "raw": msg}
+    match msg.get("type"):
+        case "record_cmd":
+            return {"kind": "record_cmd", "cmd": msg["cmd"], "exit_code": msg.get("exit_code", 0)}
+        case "stop":
+            return {"kind": "stop"}
+        case "input":
+            pass
+        case _:
+            return {"kind": "unknown", "raw": msg}
 
     raw: str = msg.get("raw", "")
     token, body = _extract_token(raw)
 
-    if token == "##":
-        return {"kind": "double_hash", "note": body}
-    if token == "#!":
-        return {
-            "kind": "hash_bang",
-            "cmd": msg.get("cmd", ""),
-            "stdout": msg.get("stdout", ""),
-            "stderr": msg.get("stderr", ""),
-            "exit_code": msg.get("exit_code", 0),
-        }
-    if token == "#$":
-        return {"kind": "hash_dollar", "cmd": msg.get("cmd", ""), "body": msg.get("stdout", "")}
-    if token == "#":
-        return {"kind": "hash", "body": body}
-    if token == "!":
-        return {
-            "kind": "bang",
-            "cmd": msg.get("cmd", ""),
-            "stdout": msg.get("stdout", ""),
-            "stderr": msg.get("stderr", ""),
-            "exit_code": msg.get("exit_code", 0),
-        }
-    if token == "$":
-        return {"kind": "dollar", "cmd": msg.get("cmd", ""), "body": msg.get("stdout", "")}
-    if token == "/":
-        parts = body.split(None, 1)
-        return {
-            "kind": "slash",
-            "command": parts[0] if parts else "",
-            "args": parts[1] if len(parts) > 1 else "",
-        }
-    if token == "//":
-        parts = body.split(None, 1)
-        return {
-            "kind": "astr_slash",
-            "command": parts[0] if parts else "",
-            "args": parts[1] if len(parts) > 1 else "",
-        }
-    return {"kind": "text", "body": body}
+    match token:
+        case "##":
+            return {"kind": "double_hash", "note": body}
+        case "#!":
+            return {
+                "kind": "hash_bang",
+                "cmd": msg.get("cmd", ""),
+                "stdout": msg.get("stdout", ""),
+                "stderr": msg.get("stderr", ""),
+                "exit_code": msg.get("exit_code", 0),
+            }
+        case "#$":
+            return {"kind": "hash_dollar", "cmd": msg.get("cmd", ""), "body": msg.get("stdout", "")}
+        case "#":
+            return {"kind": "hash", "body": body}
+        case "!":
+            return {
+                "kind": "bang",
+                "cmd": msg.get("cmd", ""),
+                "stdout": msg.get("stdout", ""),
+                "stderr": msg.get("stderr", ""),
+                "exit_code": msg.get("exit_code", 0),
+            }
+        case "$":
+            return {"kind": "dollar", "cmd": msg.get("cmd", ""), "body": msg.get("stdout", "")}
+        case "/" | "//" as slash_token:
+            parts = body.split(None, 1)
+            return {
+                "kind": "slash" if slash_token == "/" else "astr_slash",
+                "command": parts[0] if parts else "",
+                "args": parts[1] if len(parts) > 1 else "",
+            }
+        case _:
+            return {"kind": "text", "body": body}
 
 
 def truncate_output(text: str, max_head: int, max_tail: int) -> str:

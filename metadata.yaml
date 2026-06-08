@@ -1,7 +1,7 @@
 name: astrbot_plugin_astrshell
 display_name: AstrShell
 desc: AstrShell terminal adapter — interact with AstrBot from your zsh prompt
-version: v0.2.0
+version: v0.2.1
 author: Nyanifold
 repo: https://github.com/Nyanifold/astrbot_plugin_astrshell
 tags: []

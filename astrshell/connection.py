@@ -71,8 +71,12 @@ class ConnectionManager:
         try:
             conn.writer.write(data)
             await conn.writer.drain()
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except OSError:
             self.unregister(conn_id)
+            try:
+                conn.writer.close()
+            except OSError:
+                pass
 
     async def broadcast(self, data: bytes) -> None:
         """Send data to all connected clients. Removes dead connections."""
@@ -83,8 +87,12 @@ class ConnectionManager:
             try:
                 conn.writer.write(data)
                 await conn.writer.drain()
-            except (BrokenPipeError, ConnectionResetError, OSError):
+            except OSError:
                 dead.append(conn_id)
+                try:
+                    conn.writer.close()
+                except OSError:
+                    pass
         for conn_id in dead:
             self.unregister(conn_id)
 
@@ -131,7 +139,7 @@ class ConnectionManager:
             try:
                 conn.writer.close()
                 await conn.writer.wait_closed()
-            except (OSError, ConnectionResetError, BrokenPipeError):
+            except OSError:
                 pass
         if self._server is not None:
             self._server.close()

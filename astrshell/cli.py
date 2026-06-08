@@ -42,6 +42,11 @@ def setup() -> None:
         return
 
     line = f'\nsource "{zsh_script}" --skip-zshrc  # astrshell\n'
-    with zshrc.open("a") as f:
-        f.write(line)
+    try:
+        with zshrc.open("a") as f:
+            f.write(line)
+    except OSError as e:
+        print(f"Could not write to {zshrc}: {e}")
+        print(f"Add the following line manually:\n  {line.strip()}")
+        return
     print(f"Added to {zshrc}. Restart your shell or run: source ~/.zshrc")

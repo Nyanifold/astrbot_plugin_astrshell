@@ -9,10 +9,9 @@ Added: _handle_connection() per-connection async loop,
 """
 import asyncio
 import os
-import sys
 import uuid
-import datetime
 
+from astrbot.api import logger
 from astrbot.core.platform import Platform, PlatformMetadata
 from astrbot.core.platform.astrbot_message import AstrBotMessage
 from astrbot.core.platform.message_session import MessageSesion
@@ -28,14 +27,6 @@ from .events import (
     _make_msg_obj,
 )
 
-
-def _debug(msg: str, data: dict | None = None) -> None:
-    if os.environ.get("ASTRSHELL_DEBUG"):
-        ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        if data:
-            print(f"[{ts}] [astrshell:adapter] {msg}: {data}", file=sys.stderr, flush=True)
-        else:
-            print(f"[{ts}] [astrshell:adapter] {msg}", file=sys.stderr, flush=True)
 
 
 @register_platform_adapter(
@@ -65,6 +56,7 @@ class ShellPlatformAdapter(Platform):
         self._buffers: dict[str, RecordingBuffer] = {}
         self._cwds: dict[str, str] = {}
         self._session_umo: str = ""
+        self._bg_tasks: set[asyncio.Task] = set()
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
@@ -80,16 +72,16 @@ class ShellPlatformAdapter(Platform):
         """Start server (UDS or TCP) and serve connections until cancelled."""
         if _is_tcp(self._socket_path):
             socket_path = self._socket_path
-            _debug(f"run: starting TCP server at {socket_path}")
+            logger.debug(f"run: starting TCP server at {socket_path}")
         else:
             socket_path = os.path.expanduser(self._socket_path)
             os.makedirs(os.path.dirname(socket_path), exist_ok=True)
-            _debug(f"run: starting UDS server at {socket_path}")
+            logger.debug(f"run: starting UDS server at {socket_path}")
         await self._conn_mgr.start(socket_path, self._handle_connection)
         try:
             await self._conn_mgr.serve_forever()
         except asyncio.CancelledError:
-            _debug("run: cancelled, closing")
+            logger.debug("run: cancelled, closing")
             await self._conn_mgr.close()
             raise
 
@@ -110,7 +102,7 @@ class ShellPlatformAdapter(Platform):
             return
 
         session_id = raw.get("session_id", "unknown")
-        _debug(f"_handle_connection: connected", {"conn_id": conn_id[:8], "session": session_id})
+        logger.debug(f"_handle_connection: connected conn_id={conn_id[:8]} session={session_id}")
 
         # Step 2: Register and immediately send ready
         self._conn_mgr.register(conn_id, session_id, writer)
@@ -136,12 +128,12 @@ class ShellPlatformAdapter(Platform):
                     self._cwds[conn_id] = cwd
 
                 parsed = parse_input(raw)
-                _debug("_handle_connection: dispatching", {"kind": parsed.get("kind"), "conn_id": conn_id[:8]})
+                logger.debug(f"_handle_connection: dispatching kind={parsed.get('kind')} conn_id={conn_id[:8]}")
                 await self._dispatch(parsed, conn_id=conn_id, session_id=session_id,
                                      req_id=req_id, async_mode=async_mode,
                                      cwd_changed=cwd_changed)
         finally:
-            _debug(f"_handle_connection: disconnected", {"conn_id": conn_id[:8]})
+            logger.debug(f"_handle_connection: disconnected conn_id={conn_id[:8]}")
             self._conn_mgr.unregister(conn_id)
             if conn_id in self._buffers:
                 del self._buffers[conn_id]
@@ -149,7 +141,7 @@ class ShellPlatformAdapter(Platform):
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
+            except OSError:
                 pass
 
     # ── Writer helpers ─────────────────────────────────────────────────────
@@ -188,7 +180,7 @@ class ShellPlatformAdapter(Platform):
     async def send_by_session(self, session: "MessageSesion",
                                message_chain: "MessageChain") -> None:
         """Broadcast a proactive message to all shells."""
-        _debug("send_by_session: broadcasting proactive message")
+        logger.debug("send_by_session: broadcasting proactive message")
         writer = self._BroadcastWriter(self._conn_mgr)
         await ShellMessageEvent.send_message_chain(
             message_chain, writer, req_id="", async_mode=True, render_markdown=True,
@@ -313,8 +305,10 @@ class ShellPlatformAdapter(Platform):
         self.commit_event(event)
         if not self._session_umo:
             self._session_umo = event.unified_msg_origin
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._send_end_on_done(event, req_id, writer, async_mode=async_mode))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def _send_end_on_done(self, event: ShellMessageEvent, req_id: str,
                                  writer, async_mode: bool = False) -> None:
