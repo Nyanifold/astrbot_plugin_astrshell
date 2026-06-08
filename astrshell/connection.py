@@ -82,19 +82,25 @@ class ConnectionManager:
         """Send data to all connected clients. Removes dead connections."""
         async with self._lock:
             snapshot = list(self._connections.items())
-        dead: list[str] = []
-        for conn_id, conn in snapshot:
+
+        async def _send_one(conn_id: str, conn: ClientConnection) -> str | None:
             try:
                 conn.writer.write(data)
                 await conn.writer.drain()
+                return None
             except OSError:
-                dead.append(conn_id)
                 try:
                     conn.writer.close()
                 except OSError:
                     pass
-        for conn_id in dead:
-            self.unregister(conn_id)
+                return conn_id
+
+        results = await asyncio.gather(
+            *(_send_one(conn_id, conn) for conn_id, conn in snapshot)
+        )
+        for conn_id in results:
+            if conn_id is not None:
+                self.unregister(conn_id)
 
     async def start(self, socket_path: str, connection_handler) -> None:
         """Start server at socket_path, calling connection_handler per connection.
@@ -122,7 +128,8 @@ class ConnectionManager:
 
     async def serve_forever(self) -> None:
         """Block until the server is stopped (via close() or CancelledError)."""
-        assert self._server is not None, "call start() first"
+        if self._server is None:
+            raise RuntimeError("call start() first")
         async with self._server:
             await self._server.serve_forever()
 

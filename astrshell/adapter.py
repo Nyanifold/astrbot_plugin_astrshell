@@ -36,6 +36,7 @@ from .events import (
         "socket_path": "~/.astrshell/daemon.sock",
         "pipeline_register_timeout": 5.0,
         "pipeline_poll_interval": 0.05,
+        "pipeline_max_wait": 300.0,
         "max_head_lines": 100,
         "max_tail_lines": 100,
     },
@@ -50,6 +51,8 @@ class ShellPlatformAdapter(Platform):
             platform_config.get("pipeline_register_timeout", 5.0))
         self._pipeline_poll_interval: float = float(
             platform_config.get("pipeline_poll_interval", 0.05))
+        self._pipeline_max_wait: float = float(
+            platform_config.get("pipeline_max_wait", 300.0))
         self._max_head_lines: int = int(platform_config.get("max_head_lines", 100))
         self._max_tail_lines: int = int(platform_config.get("max_tail_lines", 100))
         self._conn_mgr = ConnectionManager()
@@ -279,7 +282,8 @@ class ShellPlatformAdapter(Platform):
         render = kind != "astr_cmd"
 
         if kind == "bang":
-            assert parsed is not None
+            if parsed is None:
+                return
             event: ShellMessageEvent = ShellCommandMessageEvent(
                 command=parsed["cmd"], stdout=parsed["stdout"],
                 stderr=parsed["stderr"], exit_code=parsed["exit_code"],
@@ -321,8 +325,13 @@ class ShellPlatformAdapter(Platform):
                     event.unified_msg_origin, set()):
                 break
             await asyncio.sleep(self._pipeline_poll_interval)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._pipeline_max_wait
         while event in active_event_registry._events.get(
                 event.unified_msg_origin, set()):
+            if loop.time() >= deadline:
+                logger.debug(f"_send_end_on_done: timed out waiting for event req_id={req_id}")
+                break
             await asyncio.sleep(self._pipeline_poll_interval)
 
         end_obj: dict = {"type": "end", "id": req_id}
