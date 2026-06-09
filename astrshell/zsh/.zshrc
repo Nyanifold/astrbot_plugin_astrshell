@@ -7,6 +7,12 @@ if [[ "$1" != "--skip-zshrc" ]]; then
     [[ -f ~/.zshrc ]] && source ~/.zshrc
 fi
 
+# ── Idempotency guard ──────────────────────────────────────────────────────
+# The inner source (from ~/.zshrc) already ran the full init; the outer
+# execution (CLI launcher) must not run it a second time.
+(( ${+_astrshell_initialized} )) && return 0
+typeset -g _astrshell_initialized=1
+
 # AstrShell — source this file from .zshrc
 # Usage:
 #   source /path/to/astrshell/astrshell.zsh [OPTIONS]
@@ -55,13 +61,14 @@ _astrshell_debug() {
 typeset -g _astrshell_recording=0
 typeset -g _astrshell_last_cmd=""
 typeset -g _astrshell_seq=0
-typeset -g _ASTR_FD=0  # socket FD (bidirectional)
-typeset -g _ASTR_W=0   # alias → _ASTR_FD
-typeset -g _ASTR_R=0   # alias → _ASTR_FD
+typeset -g _ASTR_FD=-1  # socket FD (bidirectional); -1 = not connected
+typeset -g _ASTR_W=-1   # alias → _ASTR_FD
+typeset -g _ASTR_R=-1   # alias → _ASTR_FD
 typeset -g _ASTR_SSH_CTL=""   # control socket path for SSH tunnel (empty = no tunnel)
 typeset -g _ASTR_SSH_HOST=""  # SSH host saved for tunnel teardown
 typeset -gA _astrshell_async_seqs=()   # seq IDs of in-flight async requests (write-only except end cleanup)
 typeset -ga _astrshell_async_queue=()  # async frames buffered during sync waits
+typeset -g _astrshell_connected=0      # 1 after daemon sends "ready", 0 otherwise
 
 # Suppress execution of bare ] commands (astrshell intercepts them)
 ']'() { return 0 }
@@ -87,9 +94,11 @@ typeset -ga _astrshell_async_queue=()  # async frames buffered during sync waits
 #            _astrshell_parse_raw "$_raw"  → populates _astrshell_msg[]
 #            Access fields as: $_astrshell_msg[key]
 
-typeset -gr _ASTR_RS=$'\x1e'   # Record Separator
-typeset -gr _ASTR_US=$'\x1f'   # Unit Separator
-typeset -gr _ASTR_GS=$'\x1d'   # Group Separator
+(( ${+_ASTR_RS} )) || {
+    typeset -gr _ASTR_RS=$'\x1e'   # Record Separator
+    typeset -gr _ASTR_US=$'\x1f'   # Unit Separator
+    typeset -gr _ASTR_GS=$'\x1d'   # Group Separator
+}
 typeset -gA _astrshell_msg=()  # Last parsed message (populated by _astrshell_parse_raw)
 
 _astrshell_send() {
@@ -287,8 +296,8 @@ _astrshell_read_reply() {
                 print -u2 -- "^C"
                 _astrshell_debug "read_reply: sending stop"
                 _astrshell_send type stop id "${_id:-0}"
-                # Ignore further Ctrl-C while waiting for daemon's graceful stop reply
-                trap '' INT
+                # Second Ctrl-C forces exit from the wait loop
+                trap 'break' INT
             fi
 
             # Advance spinner (continues even after stop is sent)
@@ -476,6 +485,7 @@ _astrshell_start() {
         _astrshell_parse_raw "$_raw"
         if [[ "$_astrshell_msg[type]" == "ready" ]]; then
             print -u2 -- "astrshell: daemon ready"
+            _astrshell_connected=1
             break
         elif [[ "$_astrshell_msg[type]" == "init" ]]; then
             print -u2 -- "astrshell: [init] $_astrshell_msg[msg]"
@@ -496,10 +506,11 @@ _astrshell_start() {
 }
 
 _astrshell_start
-zle -F $_ASTR_R _astrshell_async_handler
+(( _astrshell_connected )) && zle -F $_ASTR_R _astrshell_async_handler
 
 # ── Shutdown on exit ───────────────────────────────────────────────────────
 zshexit() {
+    (( _astrshell_connected )) || return
     _astrshell_send type disconnect id 0
     if [[ "$_ASTR_SOCK" == *:* ]]; then
         ztcp -c $_ASTR_FD 2>/dev/null
@@ -558,6 +569,16 @@ _astrshell_accept_line() {
         # ] with only whitespace — stay in ] mode, no history, no daemon call
         if [[ -z "$_token" && -z "$_body" ]]; then
             print ""
+            BUFFER="]"
+            CURSOR=1
+            _astrshell_apply_style
+            zle reset-prompt
+            return
+        fi
+
+        if (( ! _astrshell_connected )); then
+            print ""
+            print -u2 -- "astrshell: not connected (start AstrBot and open a new terminal)"
             BUFFER="]"
             CURSOR=1
             _astrshell_apply_style
